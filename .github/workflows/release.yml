@@ -17,12 +17,43 @@ jobs:
       - name: Build Universal Binary
         run: |
           swift build -c release --arch arm64 --arch x86_64
-          cp .build/apple/Products/Release/neverfold-lid-extender ./neverfold-lid-extender
-          chmod +x neverfold-lid-extender
-
+          
       - name: Get version
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create PKG Installer
+        run: |
+          # Setup package root structure
+          mkdir -p pkgroot/usr/local/bin
+          cp .build/apple/Products/Release/neverfold-lid-extender pkgroot/usr/local/bin/
+          chmod +x pkgroot/usr/local/bin/neverfold-lid-extender
+          
+          # Setup scripts
+          mkdir -p scripts
+          
+          # Preinstall: Stop and remove any existing daemon
+          cat << 'EOF' > scripts/preinstall
+          #!/bin/bash
+          /usr/local/bin/neverfold-lid-extender uninstall || true
+          exit 0
+          EOF
+          chmod +x scripts/preinstall
+          
+          # Postinstall: Install and load the daemon
+          cat << 'EOF' > scripts/postinstall
+          #!/bin/bash
+          /usr/local/bin/neverfold-lid-extender install
+          exit 0
+          EOF
+          chmod +x scripts/postinstall
+          
+          # Build PKG
+          pkgbuild --root pkgroot \
+                   --scripts scripts \
+                   --identifier kz.kzai.neverfold.extender \
+                   --version "${{ steps.version.outputs.VERSION }}" \
+                   neverfold-lid-extender.pkg
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -30,14 +61,10 @@ jobs:
           name: "NeverFold Lid Extender ${{ steps.version.outputs.VERSION }}"
           body: |
             ## Installation
-
-            Download `neverfold-lid-extender` and run:
-            ```bash
-            chmod +x neverfold-lid-extender
-            ./neverfold-lid-extender install
-            ```
-
-            Or use the NeverFold app to install automatically.
-          files: neverfold-lid-extender
+            
+            Download and run the **`neverfold-lid-extender.pkg`** installer.
+            
+            Alternatively, install directly from the **NeverFold** app.
+          files: neverfold-lid-extender.pkg
           draft: false
           prerelease: false
