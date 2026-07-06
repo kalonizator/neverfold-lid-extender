@@ -2,7 +2,7 @@ import Foundation
 import IOKit.pwr_mgt
 
 /// The daemon process that holds IOPMAssertions and manages pmset state.
-/// Listens on a Unix domain socket for commands from the main NeverFold app.
+/// Listens on TCP localhost for commands from the main NeverFold app.
 final class ExtenderDaemon {
     private var assertionID: IOPMAssertionID = 0
     private var isActive = false
@@ -14,75 +14,58 @@ final class ExtenderDaemon {
 
     func run() -> Never {
         setupSignalHandlers()
-        startSocketServer()
+        startTCPServer()
         // Keep the daemon running
         RunLoop.main.run()
         exit(0)
     }
 
-    // MARK: - Socket Server
+    // MARK: - TCP Server
 
-    private func startSocketServer() {
-        let socketPath = ExtenderInfo.socketPath
+    private func startTCPServer() {
+        let port = ExtenderInfo.ipcPort
 
-        // Ensure support directory exists
-        let supportDir = ExtenderInfo.supportDirectory
-        try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
-
-        // Remove any stale socket file
-        unlink(socketPath)
-
-        // Create Unix domain socket
-        serverSocket = socket(AF_UNIX, SOCK_STREAM, 0)
+        // Create TCP socket
+        serverSocket = socket(AF_INET, SOCK_STREAM, 0)
         guard serverSocket >= 0 else {
             fputs("Error: Failed to create socket\n", stderr)
             exit(1)
         }
 
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
+        // Allow port reuse
+        var reuseAddr: Int32 = 1
+        setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &reuseAddr, socklen_t(MemoryLayout<Int32>.size))
 
-        let pathBytes = socketPath.utf8CString
-        guard pathBytes.count <= MemoryLayout.size(ofValue: addr.sun_path) else {
-            fputs("Error: Socket path too long\n", stderr)
-            exit(1)
-        }
-
-        withUnsafeMutablePointer(to: &addr.sun_path) { sunPathPtr in
-            sunPathPtr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dest in
-                for i in 0..<pathBytes.count {
-                    dest[i] = pathBytes[i]
-                }
-            }
-        }
+        // Bind to localhost only
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
 
         let bindResult = withUnsafePointer(to: &addr) { addrPtr in
             addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-                bind(serverSocket, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                bind(serverSocket, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
 
         guard bindResult == 0 else {
-            fputs("Error: Failed to bind socket: \(String(cString: strerror(errno)))\n", stderr)
+            fputs("Error: Failed to bind to port \(port): \(String(cString: strerror(errno)))\n", stderr)
             exit(1)
         }
-
-        // Make socket accessible to the main app (running as current user)
-        chmod(socketPath, 0o666)
 
         guard listen(serverSocket, 5) == 0 else {
-            fputs("Error: Failed to listen on socket\n", stderr)
+            fputs("Error: Failed to listen on port \(port)\n", stderr)
             exit(1)
         }
 
-        fputs("Extender daemon listening on \(socketPath)\n", stderr)
+        fputs("Extender daemon listening on 127.0.0.1:\(port)\n", stderr)
 
         // Accept connections on a background thread
         DispatchQueue.global(qos: .default).async { [weak self] in
             while true {
                 guard let self else { return }
-                var clientAddr = sockaddr_un()
-                var clientAddrLen = socklen_t(MemoryLayout<sockaddr_un>.size)
+                var clientAddr = sockaddr_in()
+                var clientAddrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
                 let clientSocket = withUnsafeMutablePointer(to: &clientAddr) { addrPtr in
                     addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
                         accept(self.serverSocket, sockaddrPtr, &clientAddrLen)
@@ -231,7 +214,6 @@ final class ExtenderDaemon {
 
     private func setupSignalHandlers() {
         signal(SIGTERM) { _ in
-            // Cleanup will happen in the daemon's deinit or exit path
             exit(0)
         }
         signal(SIGINT) { _ in
@@ -246,9 +228,6 @@ final class ExtenderDaemon {
             task.arguments = ["-a", "disablesleep", "0"]
             try? task.run()
             task.waitUntilExit()
-
-            // Remove socket file
-            unlink(ExtenderInfo.socketPath)
         }
     }
 
@@ -258,7 +237,6 @@ final class ExtenderDaemon {
             assertionID = 0
         }
         _ = runPmset(disable: false)
-        unlink(ExtenderInfo.socketPath)
         if serverSocket >= 0 {
             close(serverSocket)
         }

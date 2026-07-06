@@ -110,6 +110,7 @@ func performInstall() {
             print("✅ NeverFold Lid Extender installed successfully")
             print("   Binary: \(installedPath.path)")
             print("   Daemon: \(plistPath)")
+            print("   IPC: TCP localhost:\(ExtenderInfo.ipcPort)")
         } else {
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let output = String(data: data, encoding: .utf8) ?? ""
@@ -150,7 +151,6 @@ func performUninstall() {
     // Remove installed binary and support files
     let fm = FileManager.default
     try? fm.removeItem(at: ExtenderInfo.installedBinaryPath)
-    try? fm.removeItem(atPath: ExtenderInfo.socketPath)
 
     // Remove support directory if empty
     let supportDir = ExtenderInfo.supportDirectory
@@ -161,40 +161,33 @@ func performUninstall() {
     print("✅ NeverFold Lid Extender uninstalled")
 }
 
-// MARK: - IPC Client
+// MARK: - IPC Client (TCP)
 
 func sendCommandToDaemon(_ action: ExtenderCommand.Action) {
-    let socketPath = ExtenderInfo.socketPath
+    let port = ExtenderInfo.ipcPort
 
-    // Create socket
-    let sock = socket(AF_UNIX, SOCK_STREAM, 0)
+    // Create TCP socket
+    let sock = socket(AF_INET, SOCK_STREAM, 0)
     guard sock >= 0 else {
         fputs("Error: Failed to create socket\n", stderr)
         exit(1)
     }
     defer { close(sock) }
 
-    // Connect to daemon
-    var addr = sockaddr_un()
-    addr.sun_family = sa_family_t(AF_UNIX)
-
-    let pathBytes = socketPath.utf8CString
-    withUnsafeMutablePointer(to: &addr.sun_path) { sunPathPtr in
-        sunPathPtr.withMemoryRebound(to: CChar.self, capacity: pathBytes.count) { dest in
-            for i in 0..<pathBytes.count {
-                dest[i] = pathBytes[i]
-            }
-        }
-    }
+    // Connect to daemon on localhost
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = port.bigEndian
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
 
     let connectResult = withUnsafePointer(to: &addr) { addrPtr in
         addrPtr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPtr in
-            connect(sock, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+            connect(sock, sockaddrPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
         }
     }
 
     guard connectResult == 0 else {
-        fputs("Error: Daemon not running (could not connect to \(socketPath))\n", stderr)
+        fputs("Error: Daemon not running (could not connect to 127.0.0.1:\(port))\n", stderr)
         exit(1)
     }
 
@@ -290,6 +283,6 @@ func printUsage() {
 
     The extender works with the NeverFold app to prevent your Mac from
     sleeping when you close the lid. It requires a one-time admin setup
-    to install a system daemon.
+    to install a system daemon that listens on TCP localhost:\(ExtenderInfo.ipcPort).
     """)
 }

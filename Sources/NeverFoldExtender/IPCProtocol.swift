@@ -1,9 +1,9 @@
 import Foundation
 
 /// Shared IPC protocol for communication between the main NeverFold app
-/// and the neverfold-lid-extender daemon via Unix domain socket.
+/// and the neverfold-lid-extender daemon via TCP on localhost.
 ///
-/// Messages are newline-delimited JSON.
+/// Messages are newline-delimited JSON over TCP port 52734.
 
 // MARK: - Commands (App → Extender)
 
@@ -37,17 +37,16 @@ struct ExtenderResponse: Codable {
 // MARK: - Extender Metadata
 
 enum ExtenderInfo {
-    static let version = "1.0.0"
+    static let version = "1.0.1"
     static let bundleIdentifier = "kz.kzai.neverfold.extender"
     static let daemonLabel = "kz.kzai.neverfold.extender"
+
+    /// TCP port for IPC — works through App Sandbox with network.client entitlement
+    static let ipcPort: UInt16 = 52734
 
     static var supportDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/NeverFold", isDirectory: true)
-    }
-
-    static var socketPath: String {
-        supportDirectory.appendingPathComponent("extender.sock").path
     }
 
     static var installedBinaryPath: URL {
