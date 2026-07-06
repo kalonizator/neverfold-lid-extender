@@ -1,0 +1,43 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Universal Binary
+        run: |
+          swift build -c release --arch arm64 --arch x86_64
+          cp .build/apple/Products/Release/neverfold-lid-extender ./neverfold-lid-extender
+          chmod +x neverfold-lid-extender
+
+      - name: Get version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "NeverFold Lid Extender ${{ steps.version.outputs.VERSION }}"
+          body: |
+            ## Installation
+
+            Download `neverfold-lid-extender` and run:
+            ```bash
+            chmod +x neverfold-lid-extender
+            ./neverfold-lid-extender install
+            ```
+
+            Or use the NeverFold app to install automatically.
+          files: neverfold-lid-extender
+          draft: false
+          prerelease: false
